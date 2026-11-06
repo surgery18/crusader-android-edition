@@ -164,29 +164,30 @@ public class LauncherActivity extends Activity {
 		c.addView(tag);
 		c.addView(meta);
 
-		TextView movies;
-		if (g.hasMovies) {
-			movies = label("Cutscenes: ready", 12, 0xFF66BB6A, false);
-		} else if (g.discImage != null) {
-			movies = label("Cutscenes: still inside " + g.discImage.getName(), 12, 0xFFFFB74D, false);
+		TextView status;
+		if (g.needsDiscMerge) {
+			status = label("First PLAY unpacks " + g.discImage.getName() + " (cutscenes, music, levels)", 12, 0xFFFFB74D, false);
+		} else if (!g.hasLevels) {
+			status = label("Missing STATIC/FIXED.DAT: copy GAME.BIN into this game's folder", 12, 0xFFEF5350, false);
+		} else if (g.hasMovies) {
+			status = label("Ready", 12, 0xFF66BB6A, false);
 		} else {
-			movies = label("Cutscenes: missing (game still plays)", 12, 0xFFFFB74D, false);
+			status = label("Ready (no cutscenes found)", 12, 0xFFFFB74D, false);
 		}
-		movies.setPadding(0, dp(2), 0, dp(12));
-		c.addView(movies);
+		status.setPadding(0, dp(2), 0, dp(12));
+		c.addView(status);
 
 		Button play = bigButton("PLAY", g.kind.accent);
-		play.setOnClickListener(v -> launch(g));
+		play.setEnabled(g.playable());
+		play.setAlpha(g.playable() ? 1f : 0.4f);
+		play.setOnClickListener(v -> {
+			if (g.needsDiscMerge) {
+				unpackDisc(g);
+			} else {
+				launch(g);
+			}
+		});
 		c.addView(play);
-
-		if (!g.hasMovies && g.discImage != null) {
-			Button ex = smallButton("EXTRACT CUTSCENES");
-			ex.setOnClickListener(v -> extractMovies(g));
-			LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-			elp.setMargins(0, dp(8), 0, 0);
-			ex.setLayoutParams(elp);
-			c.addView(ex);
-		}
 		return c;
 	}
 
@@ -305,18 +306,24 @@ public class LauncherActivity extends Activity {
 		}, "import").start();
 	}
 
-	private void extractMovies(final GameLibrary.Game g) {
-		final ProgressDialogView pd = new ProgressDialogView("Extracting cutscenes");
+	/**
+	 * One-time unpack of the Steam/GOG disc image into the game folder (only
+	 * files the folder lacks), then start the game.
+	 */
+	private void unpackDisc(final GameLibrary.Game g) {
+		final ProgressDialogView pd = new ProgressDialogView("Unpacking " + g.discImage.getName());
 		cancelled = false;
 		new Thread(() -> {
 			String err = null;
 			int n = 0;
 			try (FileInputStream in = new FileInputStream(g.discImage)) {
 				IsoExtractor iso = new IsoExtractor(in.getChannel());
-				n = iso.extractDir("FLICS", new File(g.dir, "FLICS"), (file, done, total) -> {
+				n = iso.mergeMissing(g.dir, (file, done, total) -> {
 					pd.update(file, (int) (100 * done / Math.max(1, total)));
 					return !cancelled;
 				});
+				//noinspection ResultOfMethodCallIgnored
+				new File(g.dir, GameLibrary.MERGED_MARKER).createNewFile();
 			} catch (IOException e) {
 				err = e.getMessage();
 			}
@@ -324,24 +331,26 @@ public class LauncherActivity extends Activity {
 			final int count = n;
 			ui.post(() -> {
 				pd.dismiss();
-				if (fe != null) {
-					new AlertDialog.Builder(this).setMessage("Could not extract cutscenes: " + fe).setPositiveButton("OK", null).show();
-				} else {
-					new AlertDialog.Builder(this)
-						.setTitle("Cutscenes ready")
-						.setMessage(count + " files extracted. " + g.discImage.getName()
-							+ " is no longer needed. Delete it to free " + (g.discImage.length() >> 20) + " MB?")
-						.setPositiveButton("Delete", (d, w) -> {
-							//noinspection ResultOfMethodCallIgnored
-							g.discImage.delete();
-							rebuild();
-						})
-						.setNegativeButton("Keep", null)
-						.show();
-				}
 				rebuild();
+				if (fe != null) {
+					new AlertDialog.Builder(this).setMessage("Could not read " + g.discImage.getName() + ": " + fe)
+						.setPositiveButton("OK", null).show();
+					return;
+				}
+				final GameLibrary.Game fresh = GameLibrary.identify(g.dir);
+				new AlertDialog.Builder(this)
+					.setTitle("Unpacked " + count + " files")
+					.setMessage(g.discImage.getName() + " is no longer needed. Delete it to free "
+						+ (g.discImage.length() >> 20) + " MB?")
+					.setPositiveButton("Delete and play", (d, w) -> {
+						//noinspection ResultOfMethodCallIgnored
+						g.discImage.delete();
+						launch(fresh != null ? fresh : g);
+					})
+					.setNegativeButton("Keep and play", (d, w) -> launch(fresh != null ? fresh : g))
+					.show();
 			});
-		}, "extract").start();
+		}, "unpack").start();
 	}
 
 	private void showSettings() {
@@ -380,10 +389,10 @@ public class LauncherActivity extends Activity {
 			+ "DUCK - crouch on / off.\n"
 			+ "FIND - cycle through usable things nearby.  USE - use the selected thing (doors, switches, terminals).\n"
 			+ "WPN / ITEM - cycle weapons and items.  USE ITEM - use the current item.  MED - use a medikit.\n"
-			+ "MENU - game menu.  SAVE / LOAD - save and load screens.  KEYS - on-screen keyboard (for naming saves).\n"
+			+ "MENU - tap to skip a cutscene or open the game menu; HOLD for the engine menu (save, load, quit to this launcher).\n"
+			+ "SAVE / LOAD - save and load screens.  KEYS - on-screen keyboard (for naming saves).\n"
 			+ "HUD - hide the controls (tap the faint HUD button to bring them back).\n\n"
-			+ "Tap anywhere else on the picture to click (menus, inventory, dialogs). "
-			+ "The phone's Back gesture opens the engine menu, where you can also quit to this launcher.\n\n"
+			+ "Tap anywhere else on the picture to click (menus, inventory, dialogs).\n\n"
 			+ "A Bluetooth game controller or keyboard also works.";
 		new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
 			.setTitle("Controls")

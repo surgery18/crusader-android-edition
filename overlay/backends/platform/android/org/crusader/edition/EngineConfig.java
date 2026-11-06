@@ -69,6 +69,12 @@ public final class EngineConfig {
 		// ScummVM's "file access changed" notice is about its own game browser,
 		// which this app never shows.
 		g.put("android_saf_dialog_shown", "true");
+		// No Regret v1.06 is flagged "unstable" upstream; the launcher already
+		// told the player which version they have, so skip the nag dialog.
+		g.put("enable_unsupported_game_warning", "false");
+		// Patched base/main.cpp: when the game ends (or fails), exit back to
+		// this launcher instead of ScummVM's own game list.
+		g.put("cae_single_game", "true");
 		g.put("gui_return_to_launcher_at_exit", "false");
 		g.put("autosave_period", "300");
 		g.put("aspect_ratio", "true");

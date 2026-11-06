@@ -9,8 +9,9 @@ touch controls built for the games.
   roll, crouch, use and search buttons, plus weapon/item/medikit buttons. The controls sit in the black
   bars beside the 4:3 picture, so they don't cover the game. Taps anywhere else act as mouse clicks for
   menus and the inventory.
-- **No PC tools needed for the game files.** Copy the Steam/GOG folder to the phone and tap IMPORT GAME. The
-  cutscenes are pulled straight out of the `GAME.BIN` disc image.
+- **No PC tools needed for the game files.** Copy the Steam/GOG folder to the phone and tap IMPORT GAME.
+  Everything the install folder lacks is read straight out of the `GAME.BIN` disc image: the cutscenes,
+  the music, and for No Regret even the level data.
 - **Phone tuning.** This is a lean arm64 build with only the Crusader engine compiled in. It runs in landscape,
   edge to edge around the camera cutout, with a 60 Hz cap and sustained-performance mode. You can turn on
   smooth scaling or high-res mode, and the HUD's size, opacity and handedness are adjustable.
@@ -35,11 +36,11 @@ This repository doesn't fork all of ScummVM. It keeps a **small patch set on top
 | Path | What it is |
 |---|---|
 | `scummvm.lock` | ScummVM git URL + the exact commit the patches apply to, and the NDK version |
-| `patches/0001-crusader-android-edition.patch` | ~70 changed lines in ScummVM: JNI bridge for HUD actions, app id, manifest (our launcher, landscape, no INTERNET), HUD hook in `ScummVMActivity` |
+| `patches/0001-crusader-android-edition.patch` | ~80 changed lines in ScummVM: JNI bridge for HUD actions, app id, manifest (our launcher, landscape, no INTERNET), HUD hook in `ScummVMActivity`, and quitting back to our launcher instead of ScummVM's game list |
 | `overlay/backends/platform/android/crusader-bridge.*` | Native side: turns HUD presses like `"ATTACK"` into the engine's keymapper actions on the engine thread |
 | `overlay/backends/platform/android/org/crusader/edition/` | Java: `LauncherActivity` (game picker), `GameLibrary` (detection), `CrusaderHud` (touch controls), `GameImporter` + `IsoExtractor` (import / cutscene extraction), `EngineConfig` (settings → `scummvm.ini`), `HudHost` (phone tuning) |
 | `overlay/dists/android/res/` | App icon (original art) and strings |
-| `scripts/build.sh` | Fetch ScummVM → apply patches → copy overlay → configure Crusader-only → build → sign |
+| `scripts/build.sh` | Build Oboe + FreeType for Android → fetch ScummVM → apply patches → copy overlay → configure Crusader-only → build → sign |
 | `scripts/build-windows.ps1` | The same build, run through WSL on Windows |
 | `tools/install_games.py` | Finds your Steam/GOG installs, extracts the cutscenes and pushes everything to the phone with adb |
 
@@ -104,8 +105,14 @@ You can add **either game or both**. The launcher only lists what it finds.
    folder (`Crusader No Remorse`, `Crusader No Regret`, ...).
 2. In the app tap **IMPORT GAME** and pick that folder. If you pick a folder that holds both games, both are
    imported.
-3. The app copies only what the engine needs and extracts the cutscenes from `GAME.BIN`. You can then
-   delete the copy in `Download/`.
+3. The app copies only what the engine needs, and fills in the rest from `GAME.BIN` (see the note below).
+   You can then delete the copy in `Download/`.
+
+> **Why GAME.BIN matters.** The Steam and GOG versions run in DOSBox with `GAME.BIN` mounted as a CD,
+> and part of each game lives only on that disc. That part is the cutscenes (`FLICS`) and the music
+> (`SOUND/*.AMF`) for both games, plus No Regret's level data (`STATIC/FIXED.DAT`). The app and the
+> install script copy every file the install folder lacks from the disc. They never overwrite installed
+> files, because those carry the 1.21 / 1.06 patches. After that, `GAME.BIN` isn't needed on the phone.
 
 ### Option B: from the PC with the install script (USB + adb)
 
@@ -132,8 +139,9 @@ games/
     STATIC/  USECODE/  SOUND/  FLICS/
 ```
 
-The folder names don't matter, because each game is recognised by its `USECODE/EUSECODE.FLX`. If you have
-no `FLICS` folder, copy `GAME.BIN` in as well and tap **EXTRACT CUTSCENES** on the game's card.
+The folder names don't matter, because each game is recognised by its `USECODE/EUSECODE.FLX`. Copy the
+game's `GAME.BIN` into the same folder. The first PLAY unpacks what's missing from it, then offers to
+delete it.
 
 **Supported versions:** the GOG/Steam releases (No Remorse 1.21, No Regret 1.06) are the main target.
 Other versions the ScummVM engine knows (CD 1.01/1.10, French, Spanish, German) are recognised too.
@@ -148,11 +156,11 @@ Other versions the ScummVM engine knows (CD 1.01/1.10, French, Spanish, German) 
 | **DUCK** | Crouch on/off |
 | **FIND** / **USE** | Cycle nearby usable things / use the selected one (doors, switches, terminals) |
 | **WPN** / **ITEM** / **USE ITEM** / **MED** | Next weapon / next item / use item / use medikit |
-| **MENU** / **SAVE** / **LOAD** | Game menu, save screen, load screen |
+| **MENU** | Tap: skip a cutscene / open the game's menu. **Hold**: engine menu (save, load, options, return to this launcher) |
+| **SAVE** / **LOAD** | Save screen, load screen |
 | **KEYS** | On-screen keyboard (for naming saves) |
 | **HUD** | Hide the controls. Tap the faint HUD button to bring them back |
 | Tap the picture | Mouse click (menus, inventory, dialogs) |
-| Back gesture | Engine menu (options, quit to the launcher) |
 
 Bluetooth controllers and keyboards work too.
 
@@ -191,8 +199,11 @@ Never commit, upload or share the game files anywhere.
 
 - **"No Crusader games installed yet" after copying.** Check that the folder contains `STATIC` and
   `USECODE` directly, not one level deeper. Then tap RESCAN.
-- **Cutscenes are missing.** The card says "Cutscenes: still inside GAME.BIN": tap EXTRACT CUTSCENES. If it
-  says "missing", copy the game's `GAME.BIN` into the game folder.
+- **"Missing STATIC/FIXED.DAT", or no music or cutscenes.** The files that only exist on the disc are
+  missing. Copy the game's `GAME.BIN` into its folder on the phone and tap PLAY, or re-run
+  `tools/install_games.py`.
+- **"Error running game".** The message comes from the engine and usually names the missing file. After
+  you close it, the app returns to the launcher.
 - **The character keeps walking after a phone call.** This shouldn't happen, because the HUD releases
   every control when the app loses focus. If it does, tap the stick once.
 - **Slow or choppy on an older phone.** Turn on *Battery saver* and turn off *High resolution mode* in

@@ -149,16 +149,26 @@ class Iso:
                 return e
         return None
 
-    def extract_dir(self, name, dest):
-        e = self.find(name)
-        if not e or not e[3]:
-            raise ValueError(f"no {name} folder in the disc image")
-        os.makedirs(dest, exist_ok=True)
-        files = [x for x in self.listdir(e) if not x[3]]
-        total = sum(x[2] for x in files) or 1
+    def merge_missing(self, game_dir):
+        """Copy files from the disc's game folders that game_dir lacks."""
+        jobs = []
+        for d in ("STATIC", "SOUND", "USECODE", "FLICS"):
+            e = self.find(d)
+            if not e or not e[3]:
+                continue
+            local = child(game_dir, d) or os.path.join(game_dir, d)
+            for f in self.listdir(e):
+                if not f[3] and not child(local, f[0]):
+                    jobs.append((f, os.path.join(local, f[0].upper())))
+        self._copy(jobs)
+        return len(jobs)
+
+    def _copy(self, jobs):
+        total = sum(f[2] for f, _ in jobs) or 1
         done = 0
-        for fname, lba, size, _ in files:
-            with open(os.path.join(dest, fname.upper()), "wb") as out:
+        for (fname, lba, size, _), path in jobs:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as out:
                 remaining = size
                 while remaining:
                     if self.ss == 2048:
@@ -171,9 +181,9 @@ class Iso:
                     out.write(chunk)
                     remaining -= len(chunk)
                     done += len(chunk)
-            print(f"\r    cutscenes: {100 * done // total:3d}%  {fname:<14}", end="", flush=True)
-        print()
-        return len(files)
+            print(f"\r    from disc: {100 * done // total:3d}%  {fname:<14}", end="", flush=True)
+        if jobs:
+            print()
 
 
 # ------------------------------------------------------------------- main
@@ -190,21 +200,25 @@ def stage(src, game_id, dest):
         p = child(src, f)
         if p and os.path.isfile(p):
             shutil.copy2(p, os.path.join(dest, f))
-    flics = os.path.join(dest, "FLICS")
-    has_movies = os.path.isdir(flics) and any(n.upper().endswith(".AVI") for n in os.listdir(flics))
-    if not has_movies:
-        disc = child(src, "GAME.BIN")
-        if not disc:
-            for n in os.listdir(src):
-                p = os.path.join(src, n)
-                if n.lower().endswith((".iso", ".bin")) and os.path.getsize(p) > 50 << 20:
-                    disc = p
-                    break
-        if disc:
-            print(f"    extracting FLICS from {os.path.basename(disc)}")
-            Iso(disc).extract_dir("FLICS", flics)
-        else:
-            print("    WARNING: no FLICS folder and no disc image: the game works but cutscenes are skipped")
+    disc = child(src, "GAME.BIN")
+    if not disc:
+        for n in os.listdir(src):
+            p = os.path.join(src, n)
+            if n.lower().endswith((".iso", ".bin")) and os.path.getsize(p) > 50 << 20:
+                disc = p
+                break
+    if disc:
+        # Steam/GOG installs keep part of the game only on the disc (cutscenes,
+        # music, No Regret's level data). Fill in what the folder lacks; never
+        # overwrite installed files, those are the patched versions.
+        print(f"    adding the files that only exist on {os.path.basename(disc)}")
+        n = Iso(disc).merge_missing(dest)
+        open(os.path.join(dest, ".cae-disc-merged"), "w").close()
+        print(f"    {n} files added")
+    else:
+        print("    no disc image found: cutscenes and music may be missing")
+    if not child(child(dest, "STATIC"), "FIXED.DAT"):
+        print("    WARNING: STATIC/FIXED.DAT is missing, the game cannot start. Put GAME.BIN in the game folder.")
 
 
 def adb(args, adb_path):

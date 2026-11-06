@@ -149,73 +149,117 @@ public final class IsoExtractor {
 		return cur;
 	}
 
+	/** Folders on the Crusader discs that hold game data. */
+	public static final String[] GAME_DIRS = { "STATIC", "SOUND", "USECODE", "FLICS" };
+
 	/** Copy one directory (non-recursive, the FLICS folder is flat). */
 	public int extractDir(String isoPath, File dest, Progress progress) throws IOException {
 		Entry dir = find(isoPath);
 		if (dir == null || !dir.dir) {
 			throw new IOException("No " + isoPath + " folder on the disc image");
 		}
-		//noinspection ResultOfMethodCallIgnored
-		dest.mkdirs();
-		List<Entry> files = list(dir);
-		long total = 0;
-		for (Entry e : files) {
+		List<Entry> files = new ArrayList<>();
+		List<File> outs = new ArrayList<>();
+		for (Entry e : list(dir)) {
 			if (!e.dir) {
-				total += e.size;
+				files.add(e);
+				outs.add(new File(dest, e.name.toUpperCase(Locale.ROOT)));
 			}
 		}
-		long done = 0;
-		int count = 0;
-		byte[] buf = new byte[2048 * 64];
-		for (Entry e : files) {
-			if (e.dir) {
+		return copyAll(files, outs, progress);
+	}
+
+	/**
+	 * Fill a game folder in from the disc: every file in the disc's game
+	 * folders that the install does not have yet is copied in. Files that
+	 * already exist are never touched, because the installed copies are the
+	 * patched ones (Steam / GOG ship v1.21 / v1.06 data next to the original
+	 * v1.0x disc). This is what DOSBox gets for free by mounting the disc:
+	 * No Regret's level data (STATIC/FIXED.DAT) and both games' music
+	 * (SOUND/*.AMF) live only on the disc.
+	 *
+	 * @return number of files copied
+	 */
+	public int mergeMissing(File gameDir, Progress progress) throws IOException {
+		List<Entry> files = new ArrayList<>();
+		List<File> outs = new ArrayList<>();
+		for (String name : GAME_DIRS) {
+			Entry dir = find(name);
+			if (dir == null || !dir.dir) {
 				continue;
 			}
-			File out = new File(dest, e.name.toUpperCase(Locale.ROOT));
-			File tmp = new File(dest, out.getName() + ".part");
-			try (FileOutputStream fos = new FileOutputStream(tmp)) {
-				long remaining = e.size;
-				long lba = e.lba;
-				while (remaining > 0) {
-					if (sectorSize == 2048) {
-						// Contiguous: read many sectors at once.
-						int chunk = (int) Math.min(buf.length, remaining);
-						ByteBuffer bb = ByteBuffer.wrap(buf, 0, chunk);
-						long pos = lba * 2048L;
-						while (bb.hasRemaining()) {
-							int r = ch.read(bb, pos + bb.position());
-							if (r < 0) {
-								throw new IOException("Unexpected end of disc image");
-							}
-						}
-						fos.write(buf, 0, chunk);
-						lba += (chunk + 2047) / 2048;
-						remaining -= chunk;
-						done += chunk;
-					} else {
-						byte[] sec = readSector(lba++);
-						int n = (int) Math.min(2048, remaining);
-						fos.write(sec, 0, n);
-						remaining -= n;
-						done += n;
-					}
-					if (progress != null && !progress.onProgress(e.name, done, total)) {
-						fos.close();
-						//noinspection ResultOfMethodCallIgnored
-						tmp.delete();
-						throw new IOException("Cancelled");
-					}
+			File local = GameLibrary.findChild(gameDir, name);
+			if (local == null) {
+				local = new File(gameDir, name);
+			}
+			for (Entry e : list(dir)) {
+				if (!e.dir && GameLibrary.findChild(local, e.name) == null) {
+					files.add(e);
+					outs.add(new File(local, e.name.toUpperCase(Locale.ROOT)));
 				}
 			}
-			if (out.exists()) {
-				//noinspection ResultOfMethodCallIgnored
-				out.delete();
-			}
-			if (!tmp.renameTo(out)) {
-				throw new IOException("Could not write " + out);
-			}
-			count++;
 		}
-		return count;
+		return copyAll(files, outs, progress);
+	}
+
+	private int copyAll(List<Entry> files, List<File> outs, Progress progress) throws IOException {
+		long total = 0;
+		for (Entry e : files) {
+			total += e.size;
+		}
+		long[] done = { 0 };
+		byte[] buf = new byte[2048 * 64];
+		for (int i = 0; i < files.size(); i++) {
+			copyFile(files.get(i), outs.get(i), buf, done, total, progress);
+		}
+		return files.size();
+	}
+
+	private void copyFile(Entry e, File out, byte[] buf, long[] done, long total, Progress progress) throws IOException {
+		File dest = out.getParentFile();
+		//noinspection ResultOfMethodCallIgnored
+		dest.mkdirs();
+		File tmp = new File(dest, out.getName() + ".part");
+		try (FileOutputStream fos = new FileOutputStream(tmp)) {
+			long remaining = e.size;
+			long lba = e.lba;
+			while (remaining > 0) {
+				if (sectorSize == 2048) {
+					// Contiguous: read many sectors at once.
+					int chunk = (int) Math.min(buf.length, remaining);
+					ByteBuffer bb = ByteBuffer.wrap(buf, 0, chunk);
+					long pos = lba * 2048L;
+					while (bb.hasRemaining()) {
+						int r = ch.read(bb, pos + bb.position());
+						if (r < 0) {
+							throw new IOException("Unexpected end of disc image");
+						}
+					}
+					fos.write(buf, 0, chunk);
+					lba += (chunk + 2047) / 2048;
+					remaining -= chunk;
+					done[0] += chunk;
+				} else {
+					byte[] sec = readSector(lba++);
+					int n = (int) Math.min(2048, remaining);
+					fos.write(sec, 0, n);
+					remaining -= n;
+					done[0] += n;
+				}
+				if (progress != null && !progress.onProgress(e.name, done[0], total)) {
+					fos.close();
+					//noinspection ResultOfMethodCallIgnored
+					tmp.delete();
+					throw new IOException("Cancelled");
+				}
+			}
+		}
+		if (out.exists()) {
+			//noinspection ResultOfMethodCallIgnored
+			out.delete();
+		}
+		if (!tmp.renameTo(out)) {
+			throw new IOException("Could not write " + out);
+		}
 	}
 }

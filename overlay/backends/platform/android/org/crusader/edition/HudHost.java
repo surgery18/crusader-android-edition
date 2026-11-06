@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.os.Build;
+import android.view.KeyEvent;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
@@ -46,6 +47,13 @@ public final class HudHost {
 			@Override
 			public void toggleKeyboard() {
 				activity.toggleScreenKeyboard();
+			}
+
+			@Override
+			public void key(int code) {
+				long t = android.os.SystemClock.uptimeMillis();
+				activity.dispatchKeyEvent(new KeyEvent(t, t, KeyEvent.ACTION_DOWN, code, 0));
+				activity.dispatchKeyEvent(new KeyEvent(t, t + 40, KeyEvent.ACTION_UP, code, 0));
 			}
 		}, accent);
 		videoLayout.addView(hud, new FrameLayout.LayoutParams(

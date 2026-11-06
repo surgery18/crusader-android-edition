@@ -34,6 +34,7 @@ SCUMMVM_COMMIT="$(sed -n 's/^commit=//p' "$REPO/scummvm.lock")"
 NDK_VERSION="$(sed -n 's/^ndk=//p' "$REPO/scummvm.lock")"
 OBOE_VERSION="$(sed -n 's/^oboe=//p' "$REPO/scummvm.lock")"
 CMAKE_VERSION="$(sed -n 's/^cmake=//p' "$REPO/scummvm.lock")"
+FREETYPE_VERSION="$(sed -n 's/^freetype=//p' "$REPO/scummvm.lock")"
 export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$HOME/android-sdk}"
 export ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-$ANDROID_SDK_ROOT/ndk/$NDK_VERSION}"
 
@@ -62,6 +63,8 @@ fi
 [ -f "$ANDROID_NDK_ROOT/source.properties" ] || { echo "Android NDK $NDK_VERSION not found at $ANDROID_NDK_ROOT (run with --setup-sdk)"; exit 1; }
 command -v java >/dev/null || { echo "A JDK (17 or newer) is required: install openjdk-17-jdk"; exit 1; }
 
+# Dependencies are built for API 21, the level ScummVM's configure targets
+# for arm64, so their libc references resolve when libscummvm.so is linked.
 # ------------------------------------------------------------ Oboe (audio)
 # ScummVM's Android mixer links Google's Oboe library, which the NDK does not
 # ship. Build it once as a static library for the target ABI.
@@ -75,15 +78,37 @@ if [ ! -f "$DEPS/lib/liboboe.a" ]; then
 	"$CMAKE_BIN/cmake" -S "$WORK/deps/oboe-src" -B "$WORK/deps/oboe-build-$ABI" -G Ninja \
 		-DCMAKE_MAKE_PROGRAM="$CMAKE_BIN/ninja" \
 		-DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
-		-DANDROID_ABI="$ABI" -DANDROID_PLATFORM=android-26 \
+		-DANDROID_ABI="$ABI" -DANDROID_PLATFORM=android-21 \
 		-DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF >/dev/null
 	"$CMAKE_BIN/cmake" --build "$WORK/deps/oboe-build-$ABI" >/dev/null
 	mkdir -p "$DEPS/lib" "$DEPS/include"
 	cp "$(find "$WORK/deps/oboe-build-$ABI" -name liboboe.a | head -1)" "$DEPS/lib/"
 	cp -R "$WORK/deps/oboe-src/include/oboe" "$DEPS/include/"
 fi
+
+# ------------------------------------------------------------ FreeType
+# The Crusader engine draws some HUD text (inventory counts) with TrueType
+# fonts; without FreeType those widgets get no font and the game crashes when
+# a mission starts.
+if [ ! -f "$DEPS/lib/libfreetype.a" ]; then
+	say "Building FreeType $FREETYPE_VERSION for $ABI"
+	rm -rf "$WORK/deps/freetype-src" "$WORK/deps/freetype-build-$ABI"
+	git clone -q --depth 1 --branch "$FREETYPE_VERSION" https://github.com/freetype/freetype.git "$WORK/deps/freetype-src"
+	"$CMAKE_BIN/cmake" -S "$WORK/deps/freetype-src" -B "$WORK/deps/freetype-build-$ABI" -G Ninja \
+		-DCMAKE_MAKE_PROGRAM="$CMAKE_BIN/ninja" \
+		-DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
+		-DANDROID_ABI="$ABI" -DANDROID_PLATFORM=android-21 \
+		-DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+		-DCMAKE_INSTALL_PREFIX="$DEPS" \
+		-DFT_DISABLE_ZLIB=ON -DFT_DISABLE_BZIP2=ON -DFT_DISABLE_PNG=ON \
+		-DFT_DISABLE_HARFBUZZ=ON -DFT_DISABLE_BROTLI=ON >/dev/null
+	"$CMAKE_BIN/cmake" --build "$WORK/deps/freetype-build-$ABI" --target install >/dev/null
+fi
+
 export CPPFLAGS="${CPPFLAGS:-} -I$DEPS/include"
 export LDFLAGS="${LDFLAGS:-} -L$DEPS/lib"
+# Let configure find target libraries (freetype2.pc) and nothing from the host.
+export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
 
 # ------------------------------------------------------------ ScummVM source
 SRC="$WORK/scummvm"
@@ -118,17 +143,19 @@ if [ ! -f config.mk ] || [ "$REPO/scummvm.lock" -nt config.mk ] || [ "$0" -nt co
 		--enable-release --disable-debug \
 		--disable-cloud --disable-libcurl --disable-sdlnet \
 		--disable-mt32emu --disable-tts --disable-fluidsynth \
-		--enable-optimizations
+		--enable-optimizations --enable-freetype2
 fi
 
 say "Compiling with $JOBS jobs"
 # Ship only the data files the Crusader engine uses (ultima8.dat, not the 16 MB
 # ultima.dat of Ultima 1/4/6), one GUI theme for the in-game menu, no
-# translations / Mac fonts / launcher icons. Saves ~24 MB of APK.
+# translations / Mac fonts / CJK fonts / launcher icons. Saves ~60 MB of APK.
+# (Crusader's own TrueType fonts are inside ultima8.dat.)
 rm -rf android_project/mainAssets/src/main/assets
 make -j"$JOBS" androidrelease \
 	DIST_FILES_ENGINEDATA="../dists/engine-data/encoding.dat ../dists/engine-data/ultima8.dat" \
-	DIST_FILES_THEMES="../gui/themes/scummremastered.zip"
+	DIST_FILES_THEMES="../gui/themes/scummremastered.zip" \
+	DIST_FILES_ENGINEDATA_BIG=
 
 # ------------------------------------------------------------------- sign
 say "Signing"

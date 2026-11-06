@@ -153,7 +153,6 @@ public final class GameImporter {
 				totalBytes += treeSize(doc);
 			}
 		}
-		Doc flics = pick(top, "FLICS");
 		Doc disc = pick(top, "GAME.BIN");
 
 		listener.onStatus("Copying " + label + "...", 0);
@@ -170,8 +169,11 @@ public final class GameImporter {
 			}
 		}
 
-		if ((flics == null || !flics.dir) && disc != null && !disc.dir) {
-			listener.onStatus("Extracting cutscenes from GAME.BIN...", 0);
+		if (disc != null && !disc.dir) {
+			// Steam/GOG installs keep part of the game only on the disc image
+			// (cutscenes, music, and for No Regret the level data). Pull in
+			// whatever the folder lacks; the 500 MB image itself is not copied.
+			listener.onStatus("Reading the rest of the game from GAME.BIN...", 0);
 			Uri du = DocumentsContract.buildDocumentUriUsingTree(tree, disc.id);
 			try (ParcelFileDescriptor pfd = cr.openFileDescriptor(du, "r")) {
 				if (pfd == null) {
@@ -179,12 +181,14 @@ public final class GameImporter {
 				}
 				try (FileInputStream fis = new FileInputStream(pfd.getFileDescriptor())) {
 					IsoExtractor iso = new IsoExtractor(fis.getChannel());
-					iso.extractDir("FLICS", new File(staging, "FLICS"), (file, done, total) -> {
-						listener.onStatus("Extracting cutscene " + file, (int) (100 * done / Math.max(1, total)));
+					iso.mergeMissing(staging, (file, done, total) -> {
+						listener.onStatus("From GAME.BIN: " + file, (int) (100 * done / Math.max(1, total)));
 						return !listener.isCancelled();
 					});
 				}
 			}
+			//noinspection ResultOfMethodCallIgnored
+			new File(staging, GameLibrary.MERGED_MARKER).createNewFile();
 		}
 
 		GameLibrary.Game g = GameLibrary.identify(staging);

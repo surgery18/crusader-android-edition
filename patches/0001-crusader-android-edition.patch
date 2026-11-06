@@ -151,6 +151,33 @@ index a5f021c9..c3887dd3 100644
  		_pluginBroadcastReceiver.unregister(this);
  
  		if (_scummvm != null)
+diff --git a/base/main.cpp b/base/main.cpp
+index ef3997f1..5df602b0 100644
+--- a/base/main.cpp
++++ b/base/main.cpp
+@@ -870,6 +870,11 @@ extern "C" int scummvm_main(int argc, const char * const argv[]) {
+ 				GUI::displayErrorDialog(result, _("Error running game:"));
+ 			}
+ 
++			// Crusader: Android Edition - the app has its own game picker, so
++			// never fall back to ScummVM's launcher: leave and let it show.
++			if (ConfMan.hasKey("cae_single_game") && ConfMan.getBool("cae_single_game"))
++				break;
++
+ 			// Quit unless an error occurred, or Return to launcher was requested
+ 			if (result.getCode() == Common::kNoError && !g_system->getEventManager()->shouldReturnToLauncher() &&
+ 			    !g_system->hasFeature(OSystem::kFeatureNoQuit) && !ConfMan.getBool("gui_return_to_launcher_at_exit"))
+@@ -920,6 +925,10 @@ extern "C" int scummvm_main(int argc, const char * const argv[]) {
+ 
+ 			// Clear the active domain
+ 			ConfMan.setActiveDomain("");
++
++			// Crusader: Android Edition - back to the app's own game picker.
++			if (ConfMan.hasKey("cae_single_game") && ConfMan.getBool("cae_single_game"))
++				break;
+ 		}
+ 
+ 		// reset the graphics to default
 diff --git a/dists/android/AndroidManifest.xml b/dists/android/AndroidManifest.xml
 index 296d2347..795cfb7c 100644
 --- a/dists/android/AndroidManifest.xml

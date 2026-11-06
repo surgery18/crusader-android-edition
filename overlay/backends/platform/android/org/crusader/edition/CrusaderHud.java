@@ -39,12 +39,17 @@ public class CrusaderHud extends View {
 		void action(String id, boolean down);
 		void releaseAll();
 		void toggleKeyboard();
+		/** Press and release a real key, exactly like a hardware keyboard. */
+		void key(int androidKeyCode);
 	}
 
 	private static final int KIND_HOLD = 0;   // down while finger is down
 	private static final int KIND_TAP = 1;    // press + release on touch down
 	private static final int KIND_KEYBOARD = 2;
 	private static final int KIND_HIDE = 3;
+	// A real Esc key: movies, menus and dialogs listen for the key itself
+	// rather than for the MENU action (in game it still maps to MENU).
+	private static final int KIND_ESC = 4;
 
 	private final class Button {
 		final String label;
@@ -83,6 +88,9 @@ public class CrusaderHud extends View {
 	private final RectF stickZone = new RectF();
 	private boolean up, down, left, right, run;
 
+	private Runnable escLongPress;
+	private boolean escLongFired;
+
 	private boolean hidden;
 	private boolean haptics;
 	private boolean lefty;
@@ -111,7 +119,7 @@ public class CrusaderHud extends View {
 		useItem = add("USE\nITEM", "USE_INVENTORY", KIND_TAP, 22);
 		medikit = add("MED", "USE_MEDIKIT", KIND_TAP, 22);
 
-		menu = add("MENU", "MENU", KIND_TAP, 20);
+		menu = add("MENU", null, KIND_ESC, 20);
 		save = add("SAVE", "SAVE", KIND_TAP, 20);
 		load = add("LOAD", "LOAD", KIND_TAP, 20);
 		keyboard = add("KEYS", null, KIND_KEYBOARD, 20);
@@ -306,6 +314,21 @@ public class CrusaderHud extends View {
 				case KIND_KEYBOARD:
 					sink.toggleKeyboard();
 					break;
+				case KIND_ESC:
+					// Tap = Esc (skip movie, game menu). Hold = ScummVM's own
+					// menu (save/load/options/quit), which gesture-navigation
+					// phones cannot open with a long Back press.
+					escLongFired = false;
+					final Button held = b;
+					escLongPress = () -> {
+						if (held.pointer != -1) {
+							escLongFired = true;
+							buzz();
+							sink.key(android.view.KeyEvent.KEYCODE_MENU);
+						}
+					};
+					postDelayed(escLongPress, 550);
+					break;
 				case KIND_HIDE:
 					setHidden(true);
 					break;
@@ -342,6 +365,11 @@ public class CrusaderHud extends View {
 				b.pointer = -1;
 				if (b.kind == KIND_HOLD) {
 					sink.action(b.action, false);
+				} else if (b.kind == KIND_ESC) {
+					removeCallbacks(escLongPress);
+					if (!escLongFired) {
+						sink.key(android.view.KeyEvent.KEYCODE_ESCAPE);
+					}
 				}
 				invalidate();
 			}

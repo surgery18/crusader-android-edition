@@ -56,15 +56,27 @@ public final class GameLibrary {
 		public final String version;
 		/** FLICS (cutscene) folder present. */
 		public final boolean hasMovies;
-		/** A GAME.BIN / *.ISO disc image we could pull the movies from. */
+		/** The GAME.BIN / *.ISO disc image, if it is in the folder. */
 		public final File discImage;
+		/** The disc image is present but not merged into the folder yet. */
+		public final boolean needsDiscMerge;
+		/** STATIC/FIXED.DAT (the level data) is present. */
+		public final boolean hasLevels;
 
-		Game(Kind kind, File dir, String version, boolean hasMovies, File discImage) {
+		Game(Kind kind, File dir, String version, boolean hasMovies, File discImage,
+				boolean needsDiscMerge, boolean hasLevels) {
 			this.kind = kind;
 			this.dir = dir;
 			this.version = version;
 			this.hasMovies = hasMovies;
 			this.discImage = discImage;
+			this.needsDiscMerge = needsDiscMerge;
+			this.hasLevels = hasLevels;
+		}
+
+		/** Can start now, or after merging the disc. */
+		public boolean playable() {
+			return hasLevels || needsDiscMerge;
 		}
 	}
 
@@ -188,24 +200,26 @@ public final class GameLibrary {
 			}
 		}
 
-		File disc = null;
-		if (!hasMovies) {
-			disc = findChild(dir, "GAME.BIN");
-			if (disc == null) {
-				File[] files = dir.listFiles();
-				if (files != null) {
-					for (File f : files) {
-						String n = f.getName().toUpperCase(Locale.ROOT);
-						if (f.isFile() && (n.endsWith(".ISO") || n.endsWith(".BIN")) && f.length() > 50L * 1024 * 1024) {
-							disc = f;
-							break;
-						}
+		File disc = findChild(dir, "GAME.BIN");
+		if (disc == null) {
+			File[] files = dir.listFiles();
+			if (files != null) {
+				for (File f : files) {
+					String n = f.getName().toUpperCase(Locale.ROOT);
+					if (f.isFile() && (n.endsWith(".ISO") || n.endsWith(".BIN")) && f.length() > 50L * 1024 * 1024) {
+						disc = f;
+						break;
 					}
 				}
 			}
 		}
-		return new Game(kind, dir, version, hasMovies, disc);
+		boolean merged = new File(dir, MERGED_MARKER).exists();
+		boolean hasLevels = findChild(findChild(dir, "STATIC"), "FIXED.DAT") != null;
+		return new Game(kind, dir, version, hasMovies, disc, disc != null && !merged, hasLevels);
 	}
+
+	/** Written into a game folder once its disc image has been merged in. */
+	public static final String MERGED_MARKER = ".cae-disc-merged";
 
 	/** Case-insensitive child lookup (Steam ships upper case, GOG mixed). */
 	public static File findChild(File dir, String name) {
