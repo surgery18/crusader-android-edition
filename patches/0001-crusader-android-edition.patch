@@ -287,3 +287,55 @@ index 99091585..8dd75040 100644
          // versioncode must be incremented for each market upload
          // maximum versioncode allowed by Play Store is: 2100000000
          // After 2.9.1.1 release the versioncode numbering scheme changed to reflect the post-2026 naming convention for ScummVM versions.
+diff --git a/engines/ultima/ultima8/world/actors/cru_avatar_mover_process.cpp b/engines/ultima/ultima8/world/actors/cru_avatar_mover_process.cpp
+index c4d259c8..a4f8e867 100644
+--- a/engines/ultima/ultima8/world/actors/cru_avatar_mover_process.cpp
++++ b/engines/ultima/ultima8/world/actors/cru_avatar_mover_process.cpp
+@@ -285,6 +285,33 @@ void CruAvatarMoverProcess::handleCombatMode() {
+ 			}
+ 		}
+ 	} else if (hasMovementFlags(MOVE_JUMP)) {
++		// Crusader: Android Edition - jump + stick direction: roll towards
++		// the side the stick points at (relative to the Silencer's facing),
++		// jump forwards when it points ahead, crouch when it points back.
++		int sx, sy;
++		getMovementFlagAxes(sx, sy);
++		if (sx != 0 || sy != 0) {
++			const Direction stickdir = Direction_Get(sy, sx, dirmode_8dirs);
++			// 0..15, clockwise from where he faces
++			const int rel = (static_cast<int>(stickdir) - static_cast<int>(curdir) + 16) % 16;
++			if (rel >= 2 && rel <= 6) {
++				avatar->doAnim(avatar->isKneeling() ? Animation::kneelCombatRollRight : Animation::combatRollRight, curdir);
++				return;
++			} else if (rel >= 10 && rel <= 14) {
++				avatar->doAnim(avatar->isKneeling() ? Animation::kneelCombatRollLeft : Animation::combatRollLeft, curdir);
++				return;
++			} else if (rel >= 7 && rel <= 9) {
++				if (!avatar->isKneeling() && avatar->hasAnim(Animation::kneelStartCru)) {
++					avatar->setActorFlag(Actor::ACT_KNEELING);
++					step(Animation::kneelStartCru, curdir);
++				}
++				return;
++			} else if (avatar->hasAnim(Animation::jumpForward)) {
++				avatar->clearInCombat();
++				step(Animation::jumpForward, curdir);
++				return;
++			}
++		}
+ 		if (hasMovementFlags(MOVE_TURN_LEFT)) {
+ 			if (avatar->isKneeling())
+ 				avatar->doAnim(Animation::kneelCombatRollLeft, direction);
+@@ -303,7 +330,12 @@ void CruAvatarMoverProcess::handleCombatMode() {
+ 	int x, y;
+ 	getMovementFlagAxes(x, y);
+ 	if (x != 0 || y != 0) {
+-		Direction nextdir = (_avatarAngle >= 0 ? Direction_FromCentidegrees(_avatarAngle) : avatar->getDir());
++		// Crusader: Android Edition - a stick / d-pad direction (MOVE_UP etc.)
++		// means "go that way": face it first, like normal (non-combat) mode
++		// does. Upstream kept the current facing here, so in combat stance
++		// the stick could only ever walk the Silencer forwards.
++		_avatarAngle = -1;
++		Direction nextdir = Direction_Get(y, x, dirmode_8dirs);
+ 
+ 		if (checkTurn(nextdir, true))
+ 			return;
