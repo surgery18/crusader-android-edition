@@ -1,0 +1,7 @@
+# The ScummVM revision this project's patches apply to.
+repo=https://github.com/scummvm/scummvm.git
+commit=037f6e2e6ece0e4239b681f0da931a7629587d26
+ndk=23.2.8568313
+# Google Oboe (Apache 2.0), the audio library ScummVM's Android backend links.
+oboe=1.9.3
+cmake=3.22.1

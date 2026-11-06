@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+	<string name="cae_app_name">Crusader</string>
+	<string name="cae_app_name_debug">Crusader (debug)</string>
+	<string name="cae_app_desc">Crusader: Android Edition - play your own copy of Crusader: No Remorse and/or No Regret</string>
+</resources>

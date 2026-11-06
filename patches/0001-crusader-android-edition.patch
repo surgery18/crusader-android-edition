@@ -1,0 +1,262 @@
+diff --git a/backends/platform/android/events.cpp b/backends/platform/android/events.cpp
+index 091157a1..20441adf 100644
+--- a/backends/platform/android/events.cpp
++++ b/backends/platform/android/events.cpp
+@@ -41,6 +41,7 @@
+ #include "backends/platform/android/android.h"
+ #include "backends/graphics/android/android-graphics.h"
+ #include "backends/platform/android/jni-android.h"
++#include "backends/platform/android/crusader-bridge.h"
+ 
+ // floating point. use sparingly
+ template<class T>
+@@ -1481,6 +1482,9 @@ bool OSystem_Android::pollEvent(Common::Event &event) {
+ 			sem_wait(&JNI::pause_sem);
+ 			LOGD("main thread woke up");
+ 		}
++
++		// Crusader: Android Edition - turn queued HUD presses into engine actions
++		CrusaderBridge::drain(this);
+ 	}
+ 
+ 	_event_queue_lock->lock();
+diff --git a/backends/platform/android/jni-android.cpp b/backends/platform/android/jni-android.cpp
+index 6378c82d..e804c1ca 100644
+--- a/backends/platform/android/jni-android.cpp
++++ b/backends/platform/android/jni-android.cpp
+@@ -42,6 +42,7 @@
+ #include "backends/platform/android/android.h"
+ #include "backends/platform/android/jni-android.h"
+ #include "backends/platform/android/asset-archive.h"
++#include "backends/platform/android/crusader-bridge.h"
+ 
+ #include "backends/networking/basic/android/jni.h"
+ 
+@@ -134,6 +135,10 @@ const JNINativeMethod JNI::_natives[] = {
+ 		(void *)JNI::pushEvent },
+ 	{ "updateTouch", "(IIII)V",
+ 		(void *)JNI::updateTouch },
++	{ "pushEngineAction", "(Ljava/lang/String;Z)V",
++		(void *)JNI::pushEngineAction },
++	{ "releaseEngineActions", "()V",
++		(void *)JNI::releaseEngineActions },
+ 	{ "setupTouchMode", "(II)V",
+ 		(void *)JNI::setupTouchMode },
+ 	{ "syncVirtkeyboardState", "(Z)V",
+@@ -973,6 +978,24 @@ void JNI::pushEvent(JNIEnv *env, jobject self, int type, int arg1, int arg2,
+ 	_system->pushEvent(type, arg1, arg2, arg3, arg4, arg5, arg6);
+ }
+ 
++void JNI::pushEngineAction(JNIEnv *env, jclass clazz, jstring actionId, jboolean down) {
++	if (!_ready_for_events || !actionId) {
++		return;
++	}
++
++	const char *id = env->GetStringUTFChars(actionId, 0);
++	CrusaderBridge::queueAction(id, down == JNI_TRUE);
++	env->ReleaseStringUTFChars(actionId, id);
++}
++
++void JNI::releaseEngineActions(JNIEnv *env, jclass clazz) {
++	if (!_ready_for_events) {
++		return;
++	}
++
++	CrusaderBridge::releaseAll();
++}
++
+ void JNI::updateTouch(JNIEnv *env, jobject self, int action, int ptr, int x, int y) {
+ 	// drop events until we're ready and after we quit
+ 	if (!_ready_for_events) {
+diff --git a/backends/platform/android/jni-android.h b/backends/platform/android/jni-android.h
+index 5763d610..fb36fa1a 100644
+--- a/backends/platform/android/jni-android.h
++++ b/backends/platform/android/jni-android.h
+@@ -195,6 +195,8 @@ private:
+ 	static void pushEvent(JNIEnv *env, jobject self, int type, int arg1,
+ 							int arg2, int arg3, int arg4, int arg5, int arg6);
+ 	static void updateTouch(JNIEnv *env, jobject self, int action, int ptr, int x, int y);
++	static void pushEngineAction(JNIEnv *env, jclass clazz, jstring actionId, jboolean down);
++	static void releaseEngineActions(JNIEnv *env, jclass clazz);
+ 	static void setupTouchMode(JNIEnv *env, jobject self, jint oldValue, jint newValue);
+ 	static void syncVirtkeyboardState(JNIEnv *env, jobject self, jboolean newState);
+ 	static void setPause(JNIEnv *env, jobject self, jboolean value);
+diff --git a/backends/platform/android/module.mk b/backends/platform/android/module.mk
+index 7cf1a532..aac820ab 100644
+--- a/backends/platform/android/module.mk
++++ b/backends/platform/android/module.mk
+@@ -6,7 +6,8 @@ MODULE_OBJS := \
+ 	android.o \
+ 	events.o \
+ 	options.o \
+-	touchcontrols.o
++	touchcontrols.o \
++	crusader-bridge.o
+ 
+ ifdef NEED_ANDROID_CPUFEATURES
+ MODULE_OBJS += \
+diff --git a/backends/platform/android/org/scummvm/scummvm/ScummVM.java b/backends/platform/android/org/scummvm/scummvm/ScummVM.java
+index 3e27a102..333d919a 100644
+--- a/backends/platform/android/org/scummvm/scummvm/ScummVM.java
++++ b/backends/platform/android/org/scummvm/scummvm/ScummVM.java
+@@ -77,6 +77,11 @@ public abstract class ScummVM implements SurfaceHolder.Callback,
+ 	// Feed an event to ScummVM.  Safe to call from other threads.
+ 	final public native void pushEvent(int type, int arg1, int arg2, int arg3,
+ 										int arg4, int arg5, int arg6);
++	// Crusader: Android Edition - press/release a keymapper action by its id
++	// (e.g. "ATTACK"). Safe to call from other threads.
++	public static native void pushEngineAction(String actionId, boolean down);
++	// Crusader: Android Edition - release every action pushed above.
++	public static native void releaseEngineActions();
+ 	// Update the 3D touch controls
+ 	final public native void setupTouchMode(int oldValue, int newValue);
+ 	final public native void updateTouch(int action, int ptr, int x, int y);
+diff --git a/backends/platform/android/org/scummvm/scummvm/ScummVMActivity.java b/backends/platform/android/org/scummvm/scummvm/ScummVMActivity.java
+index a5f021c9..c3887dd3 100644
+--- a/backends/platform/android/org/scummvm/scummvm/ScummVMActivity.java
++++ b/backends/platform/android/org/scummvm/scummvm/ScummVMActivity.java
+@@ -155,6 +155,8 @@ public class ScummVMActivity extends Activity {
+ 	private ImageView _toggleTouchModeKeyboardBtnIcon = null;
+ 	private ImageView _openMenuBtnIcon = null;
+ 	private LedView _ioLed = null;
++	// Crusader: Android Edition touch HUD (null when not started by its launcher)
++	private org.crusader.edition.CrusaderHud _crusaderHud = null;
+ 	private int _layoutOrientation;
+ 
+ 	public View _screenKeyboard = null;
+@@ -1153,6 +1155,8 @@ public class ScummVMActivity extends Activity {
+ 		_toggleTouchModeKeyboardBtnIcon = findViewById(R.id.toggle_touch_button);
+ 		_ioLed = findViewById(R.id.io_led);
+ 
++		_crusaderHud = org.crusader.edition.HudHost.attach(this, _videoLayout, getIntent());
++
+ 		// Hide by default all buttons, they will be shown when native code will start
+ 		showToggleOnScreenBtnIcons(0);
+ 		layoutButtonLayout(getResources().getConfiguration().orientation, true);
+@@ -1364,6 +1368,8 @@ public class ScummVMActivity extends Activity {
+ 		//Log.d(ScummVM.LOG_TAG, "onResume - captureMouse(true)");
+ 		_main_surface.captureMouse(true);
+ 
++		org.crusader.edition.HudHost.onResume(_crusaderHud);
++
+ 		_pluginBroadcastReceiver.register(this);
+ 	}
+ 
+@@ -1375,6 +1381,8 @@ public class ScummVMActivity extends Activity {
+ 
+ 		super.onPause();
+ 
++		org.crusader.edition.HudHost.onPause(_crusaderHud);
++
+ 		_pluginBroadcastReceiver.unregister(this);
+ 
+ 		if (_scummvm != null)
+diff --git a/dists/android/AndroidManifest.xml b/dists/android/AndroidManifest.xml
+index 296d2347..795cfb7c 100644
+--- a/dists/android/AndroidManifest.xml
++++ b/dists/android/AndroidManifest.xml
+@@ -9,8 +9,7 @@
+ 
+ 	<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+ 	<uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+-	<uses-permission android:name="android.permission.INTERNET" />
+-	<uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
++	<!-- Crusader: Android Edition: no INTERNET permission, the app never goes online. -->
+ 	<uses-permission
+ 		android:name="android.permission.READ_EXTERNAL_STORAGE"
+ 		android:maxSdkVersion="32" />
+@@ -62,50 +61,40 @@
+ 	<application
+ 		android:allowBackup="true"
+ 		android:appCategory="game"
+-		android:description="@string/app_desc"
++		android:description="@string/cae_app_desc"
+ 		android:enableOnBackInvokedCallback="@bool/enableOnBackInvokedCallback"
+-		android:icon="@mipmap/scummvm"
++		android:icon="@mipmap/crusader"
++		android:roundIcon="@mipmap/crusader"
+ 		android:intentMatchingFlags="enforceIntentFilter"
+-		android:label="@string/app_name${nameSuffix}"
++		android:label="@string/cae_app_name${nameSuffix}"
+ 		android:requestLegacyExternalStorage="true">
++		<!-- Crusader: Android Edition: our game picker is the launcher entry. -->
+ 		<activity
+-			android:name=".SplashActivity"
+-			android:banner="@drawable/leanback_icon"
++			android:name="org.crusader.edition.LauncherActivity"
+ 			android:configChanges="orientation|keyboard|keyboardHidden|navigation|screenSize|smallestScreenSize|screenLayout"
+ 			android:exported="true"
+-			android:theme="@style/SplashTheme"
+-			android:windowSoftInputMode="adjustResize">
++			android:screenOrientation="sensorLandscape"
++			android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+ 			<intent-filter>
+ 				<action android:name="android.intent.action.MAIN" />
+ 
+ 				<category android:name="android.intent.category.LAUNCHER" />
+-				<category android:name="tv.ouya.intent.category.GAME" />
+-				<category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+-			</intent-filter>
+-			<intent-filter>
+-				<!-- for external apps -->
+-				<action android:name="android.intent.action.MAIN" />
+-				<data android:scheme="scummvm" />
+ 			</intent-filter>
+ 		</activity>
++		<activity
++			android:name=".SplashActivity"
++			android:configChanges="orientation|keyboard|keyboardHidden|navigation|screenSize|smallestScreenSize|screenLayout"
++			android:exported="false"
++			android:theme="@style/SplashTheme"
++			android:windowSoftInputMode="adjustResize" />
+ 		<activity
+ 			android:name=".ScummVMActivity"
+-			android:banner="@drawable/leanback_icon"
+ 			android:configChanges="orientation|keyboard|keyboardHidden|navigation|screenSize|smallestScreenSize|screenLayout"
+ 			android:exported="false"
+-			android:launchMode="singleInstance"
++			android:launchMode="singleTask"
++			android:screenOrientation="sensorLandscape"
+ 			android:theme="@style/AppTheme"
+ 			android:windowSoftInputMode="adjustResize" />
+-		<activity
+-			android:name=".ShortcutCreatorActivity"
+-			android:exported="true"
+-			android:label="@string/shortcut_creator_title"
+-			android:theme="@style/ShortcutCreatorTheme">
+-			<intent-filter>
+-				<action android:name="android.intent.action.CREATE_SHORTCUT" />
+-				<category android:name="android.intent.category.DEFAULT" />
+-			</intent-filter>
+-		</activity>
+ 	</application>
+ 
+ </manifest>
+diff --git a/dists/android/build.gradle b/dists/android/build.gradle
+index 99091585..8dd75040 100644
+--- a/dists/android/build.gradle
++++ b/dists/android/build.gradle
+@@ -24,17 +24,19 @@ android {
+     enableKotlin = false
+ 
+     defaultConfig {
+-        applicationId "org.scummvm.scummvm"
++        // Crusader: Android Edition - its own app id, so it installs next to
++        // a regular ScummVM without clashing.
++        applicationId "io.github.crusaderandroid.edition"
+ 
+-        minSdkVersion 16
++        minSdkVersion 26
+ 
+         // Includes the default ProGuard rules files that are packaged with
+         // the Android Gradle plugin. To learn more, go to the section about
+         // R8 configuration files.
+         proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), srcProperties['srcdir'] + '/dists/android/proguard-rules.pro'
+ 
+-        versionName "2026.4.1"
+-        versionCode 26041000
++        versionName "1.0.0"
++        versionCode 100
+         // versioncode must be incremented for each market upload
+         // maximum versioncode allowed by Play Store is: 2100000000
+         // After 2.9.1.1 release the versioncode numbering scheme changed to reflect the post-2026 naming convention for ScummVM versions.

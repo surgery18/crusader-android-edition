@@ -1,0 +1,26 @@
+name: No game files
+
+# Crusader game data is commercial and must never be in this repository.
+# This check fails any push / pull request that adds it.
+on: [push, pull_request]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject game data
+        run: |
+          bad=$(git ls-files | grep -Ei '(^|/)(STATIC|USECODE|SOUND|FLICS|SAVEGAME)/|\.(flx|dat|pal|shp|avi|bin|iso|cue|exe|dll)$' || true)
+          if [ -n "$bad" ]; then
+            echo "These look like Crusader game files and must not be committed:"
+            echo "$bad"
+            exit 1
+          fi
+          big=$(git ls-files -z | xargs -0 -I{} sh -c 'test $(stat -c%s "{}") -gt 2000000 && echo "{}"' || true)
+          if [ -n "$big" ]; then
+            echo "Unexpectedly large files (game data?):"
+            echo "$big"
+            exit 1
+          fi
+          echo "OK: no game data in the repository."

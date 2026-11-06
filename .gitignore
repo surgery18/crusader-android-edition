@@ -1,0 +1,46 @@
+# ---------------------------------------------------------------------------
+# NEVER commit game data. Crusader: No Remorse / No Regret are commercial games
+# (EA). Players supply their own copies; the repository only holds the port.
+# ---------------------------------------------------------------------------
+games/
+game-files/
+*.FLX
+*.flx
+*.DAT
+*.dat
+*.PAL
+*.pal
+*.SHP
+*.shp
+*.AVI
+*.avi
+GAME.BIN
+*.BIN
+*.bin
+*.iso
+*.ISO
+*.cue
+STATIC/
+USECODE/
+SOUND/
+FLICS/
+SAVEGAME/
+*.EXE
+*.exe
+*.DLL
+*.dll
+CRUSADER.CFG
+
+# Build output and local tooling
+build/
+dist/
+keystore/
+*.apk
+*.aab
+*.idsig
+local.properties
+.gradle/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
